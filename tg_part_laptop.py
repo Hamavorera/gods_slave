@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import json
 import os
 import google.generativeai as genai
-
+import asyncio
 from dotenv import load_dotenv
 
 
@@ -113,18 +113,7 @@ async def update_task_message(context: ContextTypes.DEFAULT_TYPE):
         text=text,
         parse_mode="Markdown"
     )
-async def ask_gemini(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("❓ Напиши вопрос после команды /ask")
-        return
 
-    question = " ".join(context.args)
-    await update.message.reply_text("🤔 Думаю...")
-
-    response = model.generate_content(question)
-    answer = response.text
-
-    await update.message.reply_text(f"💡 {answer}")
 # ========================  СТАРТ  ========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Удаляем команду /start
@@ -183,5 +172,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
