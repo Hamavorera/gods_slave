@@ -7,10 +7,10 @@ import google.generativeai as genai
 
 from dotenv import load_dotenv
 
-load_dotenv()
+
 
 TOKEN = os.getenv("TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # не забудь вставить свой токен
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
 
@@ -181,3 +181,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
