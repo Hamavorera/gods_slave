@@ -5,8 +5,12 @@ import json
 import os
 import google.generativeai as genai
 
-GEMINI_API_KEY = "AIzaSyBrYFZNZfiYVA80AnN81gAQ9xTX0dow-Fw"
-TOKEN = "7452283327:AAE1nwv-I-45qvPrEmIrLMZxxom7VP3ZMe8"  # не забудь вставить свой токен
+from dotenv import load_dotenv
+
+load_dotenv()
+
+TOKEN = os.getenv("TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # не забудь вставить свой токен
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
 
