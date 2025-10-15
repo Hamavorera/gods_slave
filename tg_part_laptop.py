@@ -128,7 +128,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_state({"chat_id": msg.chat_id, "message_id": msg.message_id})
     else:
         await update_task_message(context)
+        
+async def ask_gemini(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❓ Напиши вопрос после команды /ask")
+        return
 
+    question = " ".join(context.args)
+    waiting_msg = await update.message.reply_text("🤔 Думаю...")
+
+    # вызываем Gemini в отдельном потоке, чтобы не блокировать event loop
+    response = await asyncio.to_thread(model.generate_content, question)
+    answer = response.text
+
+    await waiting_msg.delete()  # убираем "Думаю..."
+    await update.message.reply_text(f"💡 {answer}")
 
 # ========================  УДАЛЕНИЕ ЗАДАЧ  ========================
 async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -172,6 +186,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
