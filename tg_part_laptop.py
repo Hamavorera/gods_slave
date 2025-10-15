@@ -3,8 +3,13 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from datetime import datetime, timedelta
 import json
 import os
+import google.generativeai as genai
 
+GEMINI_API_KEY = "AIzaSyBrYFZNZfiYVA80AnN81gAQ9xTX0dow-Fw"
 TOKEN = "7452283327:AAE1nwv-I-45qvPrEmIrLMZxxom7VP3ZMe8"  # не забудь вставить свой токен
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-2.5-flash")
+
 
 TASKS_FILE = "tasks.json"
 STATE_FILE = "state.json"
@@ -102,8 +107,18 @@ async def update_task_message(context: ContextTypes.DEFAULT_TYPE):
         text=text,
         parse_mode="Markdown"
     )
+async def ask_gemini(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❓ Напиши вопрос после команды /ask")
+        return
 
+    question = " ".join(context.args)
+    await update.message.reply_text("🤔 Думаю...")
 
+    response = model.generate_content(question)
+    answer = response.text
+
+    await update.message.reply_text(f"💡 {answer}")
 # ========================  СТАРТ  ========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Удаляем команду /start
@@ -154,6 +169,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("remove", remove_task))
+    app.add_handler(CommandHandler("ask", ask_gemini))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_task))
 
     print("Бот запущен")
