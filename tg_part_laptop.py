@@ -5,21 +5,24 @@ import json
 import os
 import google.generativeai as genai
 import asyncio
+
 from dotenv import load_dotenv
+from flask import Flask, request, jsonify
 
+# Загружаем переменные окружения
+load_dotenv()
 
-
+# Настройки API
 TOKEN = os.getenv("TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  
-print("Token -> ", TOKEN)
-print("API -> ", GEMINI_API_KEY)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
 
-
+# Файлы для хранения данных
 TASKS_FILE = "tasks.json"
 STATE_FILE = "state.json"
 
+# Функции для работы с файлами
 def load_tasks():
     if not os.path.exists(TASKS_FILE):
         return []
@@ -30,18 +33,18 @@ def save_tasks(tasks):
     with open(TASKS_FILE, "w", encoding="utf-8") as f:
         json.dump(tasks, f, ensure_ascii=False, indent=2)
 
-def load_state():
+def load_state(state):
     if not os.path.exists(STATE_FILE):
         return {}
-    with open(STATE_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        return json.dump(state, f, ensure_ascii=False, indent=2)
+
 
 def save_state(state):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
-
-# ========================  ДОБАВЛЕНИЕ ЗАДАЧ  ========================
+# ========== Обработчики команд ==========
 async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Удаляем сообщение пользователя
     try:
@@ -77,7 +80,6 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Задача добавлена!")
 
 
-# ========================  ОБНОВЛЕНИЕ СПИСКА  ========================
 async def update_task_message(context: ContextTypes.DEFAULT_TYPE):
     tasks = load_tasks()
     state = load_state()
@@ -113,22 +115,6 @@ async def update_task_message(context: ContextTypes.DEFAULT_TYPE):
         text=text,
         parse_mode="Markdown"
     )
-
-# ========================  СТАРТ  ========================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Удаляем команду /start
-    try:
-        await update.message.delete()
-    except:
-        pass
-
-    state = load_state()
-    if not state:
-        msg = await update.message.reply_text("📋 *Список задач:*\n_Задач нет_", parse_mode="Markdown")
-        save_state({"chat_id": msg.chat_id, "message_id": msg.message_id})
-    else:
-        await update_task_message(context)
-        
 async def ask_gemini(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("❓ Напиши вопрос после команды /ask")
@@ -143,6 +129,21 @@ async def ask_gemini(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await waiting_msg.delete()  # убираем "Думаю..."
     await update.message.reply_text(f"💡 {answer}")
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Удаляем команду /start
+    try:
+        await update.message.delete()
+    except:
+        pass
+
+    state = load_state()
+    if not state:
+        msg = await update.message.reply_text("📋 *Список задач:*\n_Задач нет_", parse_mode="Markdown")
+        save_state({"chat_id": msg.chat_id, "message_id": msg.message_id})
+    else:
+        await update_task_message(context)
+
 
 # ========================  УДАЛЕНИЕ ЗАДАЧ  ========================
 async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -172,21 +173,30 @@ async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Неверный номер задачи")
 
 
-# ========================  ЗАПУСК  ========================
-def main():
-    app = Application.builder().token(TOKEN).build()
+WEBHOOK_URL = "https://your-hosting-domain.com/webhook"
+SECRET_TOKEN = os.getenv("WEBHOOK_SECRET")
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("remove", remove_task))
-    app.add_handler(CommandHandler("ask", ask_gemini))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_task))
+application = Application.builder().token(TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("remove", remove_task))
+application.add_handler(CommandHandler("ask", ask_gemini))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_task))
 
-    print("Бот запущен")
-    app.run_polling()
+app = Flask(__name__)
 
-if __name__ == "__main__":
-    main()
+@app.route('/')
+def home():
+    return "I'm alive!"
+
+@app.route("/" + SECRET_TOKEN, methods=["POST"])
+async def webhook_handler():
+    """Обрабатывает входящие обновления от Telegram."""
+    update = Update.de_json(request.get_json(), application.bot)
+    await application.process_update(update)
+    return jsonify({"status": "ok"})
 
 
 
-
+# Ваш хостинг-провайдер должен предоставить инструкцию,
+# как настроить WSGI-приложение, например, через cPanel.
+# Там нужно будет указать, что точкой входа является "app".
