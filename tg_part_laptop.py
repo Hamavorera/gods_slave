@@ -17,30 +17,18 @@ genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
 
 # Файлы для хранения данных
-TASKS_FILE = "tasks.json"
-STATE_FILE = "state.json"
+TASKS = []
+STATE = {}
 
-# Функции для работы с файлами
-def load_tasks():
-    if not os.path.exists(TASKS_FILE):
-        return []
-    with open(TASKS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+# Эта функция будет возвращать глобальный список задач
+def get_tasks():
+    global TASKS
+    return TASKS
 
-def save_tasks(tasks):
-    with open(TASKS_FILE, "w", encoding="utf-8") as f:
-        json.dump(tasks, f, ensure_ascii=False, indent=2)
-
-def load_state(state):
-    if not os.path.exists(STATE_FILE):
-        return {}
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        return json.dump(state, f, ensure_ascii=False, indent=2)
-
-
-def save_state(state):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+# Эта функция будет возвращать глобальное состояние
+def get_state():
+    global STATE
+    return STATE
 
 # ========== Обработчики команд ==========
 async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -70,17 +58,18 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             pass
 
-    tasks = load_tasks()
+    global TASKS 
+    
+    tasks = TASKS 
     tasks.append({"task": task_text, "deadline": deadline})
-    save_tasks(tasks)
 
     await update_task_message(context)
     await update.message.reply_text("✅ Задача добавлена!")
 
 
 async def update_task_message(context: ContextTypes.DEFAULT_TYPE):
-    tasks = load_tasks()
-    state = load_state()
+    tasks = TASKS
+    state = STATE
     if not state:
         return
 
@@ -135,10 +124,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-    state = load_state()
+    global STATE # Объявляем, что будем менять глобальную переменную
+    
+    # state = load_state() <--- УДАЛИТЬ
+    state = STATE # <--- ЗАМЕНИТЬ
+    
     if not state:
         msg = await update.message.reply_text("📋 *Список задач:*\n_Задач нет_", parse_mode="Markdown")
-        save_state({"chat_id": msg.chat_id, "message_id": msg.message_id})
+        # save_state({"chat_id": msg.chat_id, "message_id": msg.message_id}) <--- УДАЛИТЬ
+        STATE = {"chat_id": msg.chat_id, "message_id": msg.message_id} # <--- ЗАМЕНИТЬ
     else:
         await update_task_message(context)
 
@@ -161,14 +155,18 @@ async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Укажи корректный номер задачи")
         return
 
-    tasks = load_tasks()
+    global TASKS # Объявляем, что будем менять глобальную переменную
+
+    # tasks = load_tasks() <--- УДАЛИТЬ
+    tasks = TASKS # <--- ЗАМЕНИТЬ
+    
     if 0 <= index < len(tasks):
         tasks.pop(index)
-        save_tasks(tasks)
+        # save_tasks(tasks) <--- УДАЛИТЬ
         await update.message.reply_text("✅ Задача удалена!")
         await update_task_message(context)
     else:
-        await update.message.reply_text("❌ Неверный номер задачи")
+        await update.message.reply_text("Неверный номер!")
 
 
 WEBHOOK_URL = "https://your-hosting-domain.com/webhook"
@@ -201,6 +199,7 @@ async def webhook_handler():
 # как настроить WSGI-приложение, например, через cPanel.
 
 # Там нужно будет указать, что точкой входа является "app".
+
 
 
 
