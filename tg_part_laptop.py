@@ -9,10 +9,7 @@ import asyncio
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 
-# Загружаем переменные окружения
-load_dotenv()
 
-# Настройки API
 TOKEN = os.getenv("TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
@@ -199,4 +196,5 @@ async def webhook_handler():
 
 # Ваш хостинг-провайдер должен предоставить инструкцию,
 # как настроить WSGI-приложение, например, через cPanel.
+
 # Там нужно будет указать, что точкой входа является "app".
