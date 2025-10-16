@@ -175,6 +175,8 @@ WEBHOOK_URL = "https://your-hosting-domain.com/webhook"
 SECRET_TOKEN = os.getenv("WEBHOOK_SECRET")
 
 application = Application.builder().token(TOKEN).build()
+application.initialize() 
+
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("remove", remove_task))
 application.add_handler(CommandHandler("ask", ask_gemini))
@@ -199,4 +201,5 @@ async def webhook_handler():
 # как настроить WSGI-приложение, например, через cPanel.
 
 # Там нужно будет указать, что точкой входа является "app".
+
 
