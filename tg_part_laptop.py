@@ -1,4 +1,5 @@
 import re
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from telegram import Update
 import json
@@ -330,4 +331,5 @@ async def process_telegram_update(request: Request):
         # В случае других ошибок
         print(f"Error processing update: {e}")
         return Response(status_code=500)
+
 
