@@ -4,6 +4,7 @@ google-generativeai== 0.8.5
 flask[async]==3.1.2
 dotenv==0.9.9
 gunicorn==23.0.0
-uvicorn=0.37.0
+uvicorn==0.37.0
+
 
 
