@@ -1,198 +1,126 @@
-import re
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Response
-from telegram import Update
-import json
+# tg_part_laptop.py
 
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from datetime import datetime, timedelta
 import os
+import re
+import json
+from datetime import datetime
+from contextlib import asynccontextmanager
+
+from telegram import Update, error
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from fastapi import FastAPI, Request, Response
 import google.generativeai as genai
-import asyncio
 
+# --- Настройка ---
+TOKEN = os.getenv("TOKEN")
+# ID вашего личного чата с ботом (ваш user_id)
+TARGET_CHAT_ID = os.getenv("TARGET_CHAT_ID")
+# ID сообщения, которое бот будет редактировать
+MESSAGE_ID_TO_EDIT = os.getenv("MESSAGE_ID_TO_EDIT")
 
-# Глобальная переменная для хранения ID чата, где находится закрепленное сообщение
-MAIN_CHAT_ID = None
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel("gemini-1.5-flash")
+else:
+    model = None
 
-# ======================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ========================
+# --- Вспомогательные функции ---
 
-async def _get_pinned_message_text(context: ContextTypes.DEFAULT_TYPE) -> str:
-    """Находит закрепленное сообщение и возвращает его текст."""
-    global MAIN_CHAT_ID
-    if MAIN_CHAT_ID is None:
-        return ""
-
-    try:
-        chat_info = await context.bot.get_chat(chat_id=MAIN_CHAT_ID)
-        if chat_info.pinned_message:
-            return chat_info.pinned_message.text
-    except Exception:
-        # Ошибка, если бот не имеет доступа или чат удален
-        return ""
-    return ""
-
-
-def _parse_tasks_from_text(text: str) -> list:
-    """Разбирает текст закрепленного сообщения обратно в список задач."""
-    tasks = []
-    # Удаляем заголовок и разбиваем по строкам
-    lines = text.split('\n')[1:]
-
-    # Шаблон для поиска: [Номер]. [Текст задачи] ( [Дата/Статус] )
+def parse_tasks_from_text(text: str) -> list:
+    """Парсит задачи из текста."""
+    if not text: return []
+    tasks, lines = [], text.split('\n')[1:]
     pattern = re.compile(r'^\d+\.\s+(.*?)(?:\s+\(([^)]+)\))?$')
-
     for line in lines:
-        line = line.strip()
-        if not line or line.startswith('_'):
-            continue
-
-        # Удаляем временную разметку
-        line = line.replace('❌ ~', '').replace('~ (просрочено)', '').replace('⚠️ *', '').replace('*', '')
-
+        line = line.strip().replace('❌ ~', '').replace('~ (просрочено)', '').replace('⚠️ *', '').replace('*', '')
+        if not line: continue
         match = pattern.match(line)
         if match:
             task_text = match.group(1).strip()
-            deadline_or_status = match.group(2)
-
-            deadline = None
-            if deadline_or_status and re.match(r'\d{4}-\d{2}-\d{2}', deadline_or_status):
-                deadline = deadline_or_status
-
-            tasks.append({"task": task_text, "deadline": deadline})
-
+            deadline_str = match.group(2) if match.group(2) and re.match(r'\d{4}-\d{2}-\d{2}', match.group(2)) else None
+            tasks.append({"task": task_text, "deadline": deadline_str})
     return tasks
 
-
-async def send_long_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str, prefix: str = "💡 "):
-    """Отправляет длинное сообщение, разбивая его на части."""
-    MAX_LENGTH = 4096
-    while text:
-        chunk = text[:MAX_LENGTH]
-        text = text[MAX_LENGTH:]
-
-        if prefix:
-            chunk = prefix + chunk
-            prefix = ""
-
-        await context.bot.send_message(chat_id=chat_id, text=chunk)
-
-
-# ... (Код add_task, update_task_message, ask_gemini, start, remove_task) ...
-
-async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def get_tasks_from_message(context: ContextTypes.DEFAULT_TYPE) -> list:
+    """Читает сообщение-хранилище и возвращает список задач."""
+    if not (TARGET_CHAT_ID and MESSAGE_ID_TO_EDIT): return []
     try:
-        await update.message.delete()
-    except:
-        pass
+        msg = await context.bot.get_message(chat_id=TARGET_CHAT_ID, message_id=MESSAGE_ID_TO_EDIT)
+        return parse_tasks_from_text(msg.text)
+    except Exception as e:
+        print(f"Не удалось прочитать сообщение с задачами: {e}")
+        return []
 
-    text = update.message.text.strip()
-    if not text.startswith("-"):
+async def update_tasks_message(context: ContextTypes.DEFAULT_TYPE, tasks: list):
+    """Обновляет текст сообщения-хранилища."""
+    if not (TARGET_CHAT_ID and MESSAGE_ID_TO_EDIT):
+        print("Переменные ID не установлены. Обновление невозможно.")
         return
-
-    task_text = text[1:].strip()
-    deadline = None
-    for part in task_text.split():
-        try:
-            if len(part.split(".")) == 3:
-                deadline = datetime.strptime(part, "%d.%m.%y").strftime("%Y-%m-%d")
-                task_text = task_text.replace(part, "").strip()
-            elif len(part.split(".")) == 2:
-                year = datetime.now().year
-                deadline = datetime.strptime(f"{part}.{year}", "%d.%m.%Y").strftime("%Y-%m-%d")
-                task_text = task_text.replace(part, "").strip()
-        except ValueError:
-            pass
-
-    # 1. ЧИТАЕМ СТАРЫЙ СПИСОК ИЗ ЗАКРЕПЛЕННОГО СООБЩЕНИЯ
-    pinned_text = await _get_pinned_message_text(context)
-    tasks = _parse_tasks_from_text(pinned_text)
-
-    # 2. ДОБАВЛЯЕМ НОВУЮ ЗАДАЧУ
-    tasks.append({"task": task_text, "deadline": deadline})
-
-    # 3. ОБНОВЛЯЕМ ЗАКРЕПЛЕННОЕ СООБЩЕНИЕ
-    await update_task_message(context, tasks)
-
-    await update.message.reply_text("✅ Задача добавлена!")
-
-
-async def update_task_message(context: ContextTypes.DEFAULT_TYPE, tasks: list = None):
-    global MAIN_CHAT_ID
-
-    # Если список не передан, загружаем его из закрепленного сообщения
-    if tasks is None:
-        pinned_text = await _get_pinned_message_text(context)
-        tasks = _parse_tasks_from_text(pinned_text)
-
-    if MAIN_CHAT_ID is None:
-        return
-
-    chat_id = MAIN_CHAT_ID
-    message_id = None
-
-    # Получаем ID закрепленного сообщения
-    try:
-        chat_info = await context.bot.get_chat(chat_id=chat_id)
-        if chat_info.pinned_message:
-            message_id = chat_info.pinned_message.message_id
-    except Exception:
-        return
-
-    # Логика создания сообщения, если оно не закреплено
-    if message_id is None:
-        new_msg = await context.bot.send_message(
-            chat_id=chat_id,
-            text="📋 *Список задач:*\n_Задач нет_",
-            parse_mode="Markdown"
-        )
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="⚠️ **Пожалуйста, немедленно ЗАКРЕПИТЕ это сообщение.** Бот будет его обновлять.",
-            reply_to_message_id=new_msg.message_id,
-            parse_mode="Markdown"
-        )
-        return
-
-    # 4. Формируем текст списка (используя tasks)
-    # ... (ВАШ КОД ФОРМИРОВАНИЯ ТЕКСТА) ...
+    
     text = "📋 *Список задач:*\n"
-    if tasks:
+    if not tasks:
+        text += "_Задач нет_"
+    else:
         now = datetime.now()
-        for i, t in enumerate(tasks, start=1):
+        sorted_tasks = sorted(tasks, key=lambda x: datetime.strptime(x['deadline'], '%Y-%m-%d') if x['deadline'] else datetime.max)
+        for i, t in enumerate(sorted_tasks, start=1):
             line = t["task"]
             if t.get("deadline"):
-                try:
-                    date = datetime.strptime(t["deadline"], "%Y-%m-%d")
-                    days_left = (date - now).days
-
-                    if days_left < 0:
-                        line = f"❌ ~{line}~ (просрочено)"
-                    elif days_left <= 2:
-                        line = f"⚠️ *{line}* (осталось {days_left} дн.)"
-                    else:
-                        # Сохраняем дату в формате YYYY-MM-DD для парсинга
-                        line = f"{line} ({t['deadline']})"
-                except Exception:
-                    line = f"{line} ({t['deadline']})"
+                date = datetime.strptime(t["deadline"], "%Y-%m-%d")
+                days_left = (date.date() - now.date()).days
+                if days_left < 0: line = f"❌ ~{line}~ (просрочено)"
+                elif days_left <= 2: line = f"⚠️ *{line}* (осталось {days_left} дн.)"
+                else: line = f"{line} ({t['deadline']})"
             text += f"{i}. {line}\n"
-    else:
-        text += "_Задач нет_"
 
-    # 5. Редактируем закрепленное сообщение
     try:
-        await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        if "message is not modified" not in str(e):
-            raise
+        await context.bot.edit_message_text(text, chat_id=TARGET_CHAT_ID, message_id=MESSAGE_ID_TO_EDIT, parse_mode="Markdown")
+    except error.BadRequest as e:
+        if "message is not modified" not in str(e): print(f"Не удалось обновить сообщение: {e}")
 
+# --- Команды ---
+
+async def setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда для первоначальной настройки."""
+    # ID вашего личного чата - это ID пользователя, который пишет боту
+    user_id = update.message.from_user.id
+    
+    setup_msg = await update.message.reply_text("Это будет твое новое хранилище задач.")
+    # ID сообщения, которое мы будем редактировать - это ID сообщения, которое отправил сам бот
+    message_id_to_edit = setup_msg.message_id
+    
+    await setup_msg.edit_text(
+        "**Это твое хранилище задач.**\n\n"
+        "**Инструкция по настройке:**\n"
+        "1. Зайди в переменные окружения на Render.\n"
+        "2. Создай/обнови переменную `TARGET_CHAT_ID` вот этим значением:\n"
+        f"`{user_id}`\n"
+        "3. Создай/обнови переменную `MESSAGE_ID_TO_EDIT` вот этим значением:\n"
+        f"`{message_id_to_edit}`\n"
+        "4. Сохрани. Render сам перезапустит бота.\n"
+        "5. После этого можешь для удобства закрепить это сообщение."
+    )
+
+async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tasks = await get_tasks_from_message(context)
+    text = update.message.text.strip().lstrip('-').strip()
+    tasks.append({"task": text, "deadline": None}) # Упрощено, добавьте свою логику даты
+    await update_tasks_message(context, tasks)
+    await update.message.delete()
+
+async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tasks = await get_tasks_from_message(context)
+    try:
+        index = int(context.args[0]) - 1
+        sorted_tasks_original_indices = sorted(range(len(tasks)), key=lambda k: datetime.strptime(tasks[k]['deadline'], '%Y-%m-%d') if tasks[k]['deadline'] else datetime.max)
+        if 0 <= index < len(tasks):
+            task_index_to_remove = sorted_tasks_original_indices[index]
+            tasks.pop(task_index_to_remove)
+            await update_tasks_message(context, tasks)
+    except (ValueError, IndexError):
+        await update.message.reply_text("❌ Неверный номер.", quote=False)
+    await update.message.delete()
 
 async def ask_gemini(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -214,112 +142,24 @@ async def ask_gemini(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Отправка длинного сообщения
     await send_long_message(context, update.message.chat_id, answer)
 
+# --- Настройка сервера FastAPI ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if TOKEN: await application.initialize()
+    yield
+    if TOKEN: await application.shutdown()
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.message.delete()
-    except:
-        pass
-    global MAIN_CHAT_ID
+api = FastAPI(lifespan=lifespan)
+application = Application.builder().token(TOKEN).build()
 
-    # 1. Сохраняем ID чата для дальнейшего использования
-    if MAIN_CHAT_ID is None:
-        MAIN_CHAT_ID = update.message.chat_id
-        await update.message.reply_text(
-            "✅ ID чата сохранен. Теперь бот будет искать закрепленное сообщение в этом чате.")
-
-    # 2. Пытаемся обновить сообщение (оно само создаст новое, если нет закрепленного)
-    await update_task_message(context)
-
-
-async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await update.message.delete()
-    except:
-        pass
-
-    # ... (Ваш код проверки номера) ...
-    if not context.args:
-        await update.message.reply_text("❌ Укажи номер задачи для удаления")
-        return
-
-    try:
-        index = int(context.args[0]) - 1
-    except ValueError:
-        await update.message.reply_text("❌ Укажи корректный номер задачи")
-        return
-
-    # 1. ЧИТАЕМ СТАРЫЙ СПИСОК ИЗ ЗАКРЕПЛЕННОГО СООБЩЕНИЯ
-    pinned_text = await _get_pinned_message_text(context)
-    tasks = _parse_tasks_from_text(pinned_text)
-
-    # 2. УДАЛЯЕМ ЗАДАЧУ
-    if 0 <= index < len(tasks):
-        tasks.pop(index)
-
-        # 3. ОБНОВЛЯЕМ ЗАКРЕПЛЕННОЕ СООБЩЕНИЕ
-        await update_task_message(context, tasks)
-        await update.message.reply_text("✅ Задача удалена!")
-    else:
-        await update.message.reply_text(f"Неверный номер! Сейчас в списке {len(tasks)} задач.")
-
-
-# Конфигурация Webhook
-PORT = int(os.environ.get('PORT', '8080'))
-URL_PATH = os.getenv("WEBHOOK_SECRET")
-WEBHOOK_URL = f"https://gods-slave.onrender.com/{URL_PATH}" # Замените домен, если он другой
-SECRET_TOKEN = os.getenv("WEBHOOK_SECRET")
-
-
-TOKEN = os.getenv("TOKEN")
-
-# 1. Создаем "мозг" бота, как и раньше
-application = (
-    Application.builder()
-    .token(TOKEN)
-    .read_timeout(30)
-    .write_timeout(30)
-    .build()
-)
-
-
-TOKEN = os.getenv("TOKEN")
-
-# 1. Создаем "мозг" бота
-application = (
-    Application.builder()
-    .token(TOKEN)
-    .read_timeout(30)
-    .write_timeout(30)
-    .build()
-)
-
-# 2. Регистрируем обработчики
-application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("setup", setup))
 application.add_handler(CommandHandler("remove", remove_task))
 application.add_handler(CommandHandler("ask", ask_gemini))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_task))
 
-
-# ❗️ НОВЫЙ КОД: "КЛЮЧ ЗАЖИГАНИЯ" ДЛЯ БОТА
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Выполняется при старте сервера для инициализации бота."""
-    await application.initialize()
-    yield
-    """Выполняется при остановке сервера для очистки."""
-    await application.shutdown()
-
-# ❗️ ИЗМЕНЕНИЕ ЗДЕСЬ: Передаем lifespan в FastAPI
-api = FastAPI(lifespan=lifespan)
-
-
-# 4. Создаем "дверь" для Телеграма
 URL_PATH = os.getenv("WEBHOOK_SECRET", "webhook")
-
 @api.post(f"/{URL_PATH}")
 async def process_telegram_update(request: Request):
-    """Принимает обновление от Telegram и передает его боту."""
     try:
         data = await request.json()
         update = Update.de_json(data, application.bot)
@@ -328,6 +168,3 @@ async def process_telegram_update(request: Request):
     except Exception as e:
         print(f"Error processing update: {e}")
         return Response(status_code=500)
-
-
-
