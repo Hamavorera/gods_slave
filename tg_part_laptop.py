@@ -268,32 +268,21 @@ WEBHOOK_URL = f"https://gods-slave.onrender.com/{URL_PATH}" # Замените �
 SECRET_TOKEN = os.getenv("WEBHOOK_SECRET")
 
 TOKEN = os.getenv("TOKEN")
-application = Application.builder().token(TOKEN).build()
-# ❗️ Не нужно вызывать initialize() или asyncio.run(), это сделает run_webhook
 
 
-def main():
-    """Запускает бота."""
-    print("Бот запускается в режиме вебхука...")
+# Создаем и настраиваем приложение, но НЕ ЗАПУСКАЕМ его
+application = (
+    Application.builder()
+    .token(TOKEN)
+    .read_timeout(30)  # Рекомендуется для вебхуков
+    .write_timeout(30) # Рекомендуется для вебхуков
+    .webhook_url(WEBHOOK_URL, secret_token=URL_PATH) # Передаем URL и токен здесь
+    .build()
+)
 
-    # 1. Создаем экземпляр Application
-    application = Application.builder().token(TOKEN).build()
+# Добавляем обработчики
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("remove", remove_task))
+application.add_handler(CommandHandler("ask", ask_gemini))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_task))
 
-    # 2. Добавляем обработчики команд
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("remove", remove_task))
-    application.add_handler(CommandHandler("ask", ask_gemini))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_task))
-
-    # 3. Запускаем вебхук. Эта функция сама управляет циклом asyncio.
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=URL_PATH,
-        webhook_url=WEBHOOK_URL,
-        secret_token=SECRET_TOKEN
-    )
-
-if __name__ == "__main__":
-    # ❗️ Uvicorn будет вызывать main()
-    main()
