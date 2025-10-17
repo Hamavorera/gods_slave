@@ -271,12 +271,12 @@ TOKEN = os.getenv("TOKEN")
 
 
 # Создаем и настраиваем приложение, но НЕ ЗАПУСКАЕМ его
+# Создаем и настраиваем приложение
 application = (
     Application.builder()
     .token(TOKEN)
-    .read_timeout(30)  # Рекомендуется для вебхуков
-    .write_timeout(30) # Рекомендуется для вебхуков
-    .webhook_url(WEBHOOK_URL, secret_token=URL_PATH) # Передаем URL и токен здесь
+    .read_timeout(30)
+    .write_timeout(30)
     .build()
 )
 
@@ -285,4 +285,5 @@ application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("remove", remove_task))
 application.add_handler(CommandHandler("ask", ask_gemini))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_task))
+
 
