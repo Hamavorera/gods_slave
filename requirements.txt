@@ -2,8 +2,6 @@ python-telegram-bot[webhooks]==21.2
 uvicorn==0.30.1
 google-generativeai==0.7.1
 python-dotenv==1.0.1
-
-
-
+fastapi==0.111.0
 
 
