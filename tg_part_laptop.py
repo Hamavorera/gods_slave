@@ -276,6 +276,16 @@ application.add_handler(CommandHandler("remove", remove_task))
 application.add_handler(CommandHandler("ask", ask_gemini))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_task))
 
+async def init_application():
+    await application.initialize()
+
+try:
+    asyncio.run(init_application()) # <--- ЭТО ВЫЗЫВАЕТ ОШИБКУ
+except RuntimeError as e:
+    if 'cannot run' in str(e).lower():
+        pass
+    else:
+        raise
 
 def main():
     print("Бот запускается...")
