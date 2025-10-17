@@ -143,14 +143,23 @@ async def ask_gemini(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     question = " ".join(context.args)
+    
+    # 💡 ДОБАВЛЯЕМ ТРЕБОВАНИЕ КРАТКОСТИ В ПРОМПТ
+    prompt = f"Ответь на вопрос: {question}\n\nВАЖНО: Ответ должен быть кратким и не превышать 3500 символов, чтобы поместиться в одно сообщение Telegram."
+
     waiting_msg = await update.message.reply_text("🤔 Думаю...")
 
-    # вызываем Gemini в отдельном потоке, чтобы не блокировать event loop
-    response = await asyncio.to_thread(model.generate_content, question)
+    # вызываем Gemini
+    response = await asyncio.to_thread(model.generate_content, prompt) # Используем новый prompt
     answer = response.text
 
-    await waiting_msg.delete()  # убираем "Думаю..."
-    await update.message.reply_text(f"💡 {answer}")
+    await waiting_msg.delete()
+    
+    # ❗️ Выполняем проверку длины перед отправкой
+    if len(answer) > 4096:
+        await update.message.reply_text("⚠️ Ответ от ИИ получился слишком длинным. Пожалуйста, задай более конкретный вопрос.")
+    else:
+        await update.message.reply_text(f"💡 {answer}")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -243,6 +252,7 @@ async def webhook_handler():
 # как настроить WSGI-приложение, например, через cPanel.
 
 # Там нужно будет указать, что точкой входа является "app".
+
 
 
 
