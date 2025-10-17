@@ -1,5 +1,7 @@
 import re
-
+from fastapi import FastAPI, Request, Response
+from telegram import Update
+import json
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timedelta
@@ -267,11 +269,22 @@ URL_PATH = os.getenv("WEBHOOK_SECRET")
 WEBHOOK_URL = f"https://gods-slave.onrender.com/{URL_PATH}" # Замените домен, если он другой
 SECRET_TOKEN = os.getenv("WEBHOOK_SECRET")
 
+# tg_part_laptop.py
+
+# ... (все ваши импорты и функции бота остаются как есть) ...
+
+# ❗️ ДОБАВЬТЕ ЭТИ ИМПОРТЫ В НАЧАЛО ФАЙЛА
+from fastapi import FastAPI, Request, Response
+from telegram import Update
+import json
+
+# ... (здесь весь ваш код: start, add_task, и т.д.) ...
+
+# --- НОВЫЙ КОД ДЛЯ ЗАПУСКА ---
+
 TOKEN = os.getenv("TOKEN")
 
-
-# Создаем и настраиваем приложение, но НЕ ЗАПУСКАЕМ его
-# Создаем и настраиваем приложение
+# 1. Создаем "мозг" бота, как и раньше
 application = (
     Application.builder()
     .token(TOKEN)
@@ -280,10 +293,41 @@ application = (
     .build()
 )
 
-# Добавляем обработчики
+# 2. Регистрируем все ваши обработчики, как и раньше
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("remove", remove_task))
 application.add_handler(CommandHandler("ask", ask_gemini))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_task))
 
+# 3. Создаем веб-сервер на FastAPI
+api = FastAPI()
+
+# 4. Создаем "дверь" для Телеграма
+# URL_PATH должен быть таким же, как в вашем WEBHOOK_SECRET
+URL_PATH = os.getenv("WEBHOOK_SECRET", "webhook")
+
+
+@api.post(f"/{URL_PATH}")
+async def process_telegram_update(request: Request):
+    """Принимает обновление от Telegram и передает его боту."""
+    try:
+        # Получаем данные из запроса
+        data = await request.json()
+
+        # Создаем объект Update
+        update = Update.de_json(data, application.bot)
+
+        # Передаем обновление "мозгу" бота на обработку
+        await application.process_update(update)
+
+        # Отвечаем Telegram, что все в порядке
+        return Response(status_code=200)
+
+    except json.JSONDecodeError:
+        # Если пришел невалидный JSON
+        return Response(content="Invalid JSON", status_code=400)
+    except Exception as e:
+        # В случае других ошибок
+        print(f"Error processing update: {e}")
+        return Response(status_code=500)
 
