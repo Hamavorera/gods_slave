@@ -140,7 +140,8 @@ async def ask_gemini(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await waiting_msg.delete()
 
     # Отправка длинного сообщения
-    await send_long_message(context, update.message.chat_id, answer)
+    # await send_long_message(context, update.message.chat_id, answer)
+    await update.message.reply_text(answer)
 
 # --- Настройка сервера FastAPI ---
 @asynccontextmanager
@@ -168,5 +169,6 @@ async def process_telegram_update(request: Request):
     except Exception as e:
         print(f"Error processing update: {e}")
         return Response(status_code=500)
+
 
 
