@@ -21,7 +21,7 @@ MESSAGE_ID_TO_EDIT = os.getenv("MESSAGE_ID_TO_EDIT")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("gemini-2.5-flash")
 else:
     model = None
 
@@ -168,4 +168,5 @@ async def process_telegram_update(request: Request):
     except Exception as e:
         print(f"Error processing update: {e}")
         return Response(status_code=500)
+
 
