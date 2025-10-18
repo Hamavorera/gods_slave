@@ -134,7 +134,7 @@ async def ask_gemini(update: Update, context: ContextTypes.DEFAULT_TYPE):
     waiting_msg = await update.message.reply_text("🤔 Думаю...")
 
     # Вызов Gemini
-    response = await asyncio.to_thread(model.generate_content, prompt)
+    response = await model.generate_content_async(prompt)
     answer = response.text
 
     await waiting_msg.delete()
@@ -168,3 +168,4 @@ async def process_telegram_update(request: Request):
     except Exception as e:
         print(f"Error processing update: {e}")
         return Response(status_code=500)
+
