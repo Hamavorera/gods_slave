@@ -1,5 +1,3 @@
-# tg_part_laptop.py
-
 import os
 import re
 import json
@@ -190,37 +188,64 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Удаляет задачу по тексту 'удали N'."""
     tasks = await get_tasks_from_message(context)
+    if not tasks:
+        await update.message.reply_text("❌ Список задач и так пуст.", quote=False)
+        return
+
+    text = update.message.text.strip()
+    # Ищем первое число в сообщении
+    match = re.search(r'\d+', text)
+
+    if not match:
+        await update.message.reply_text("❌ Не могу понять, какой номер задачи удалить. Напиши 'удали 2'.", quote=False)
+        await update.message.delete()
+        return
+
     try:
-        index = int(context.args[0]) - 1
-        # Сортируем задачи так же, как они отображаются, чтобы индексы совпадали
+        index = int(match.group(0)) - 1
+
+        # Используем ту же логику сортировки, что и при отображении
         sorted_tasks_with_indices = sorted(
             enumerate(tasks),
             key=lambda x: datetime.strptime(x[1]['deadline'], '%Y-%m-%d') if x[1]['deadline'] else datetime.max
         )
+
         if 0 <= index < len(tasks):
-            # Получаем реальный индекс задачи из неотсортированного списка
+            # Находим реальный индекс задачи в исходном списке
             original_index = sorted_tasks_with_indices[index][0]
-            # Удаляем по реальному индексу
-            tasks.pop(original_index)
+            removed_task = tasks.pop(original_index)
             await update_tasks_message(context, tasks)
+            # await update.message.reply_text(f"✅ Задача '{removed_task['task']}' удалена!", quote=False) # Можно раскомментировать
+        else:
+            await update.message.reply_text(f"❌ Неверный номер! Сейчас в списке {len(tasks)} задач.", quote=False)
+
     except (ValueError, IndexError):
-        await update.message.reply_text("❌ Неверный номер.", quote=False)
+        await update.message.reply_text("❌ Ошибка. Укажи корректный номер.", quote=False)
+
     await update.message.delete()
 
 
 async def ask_gemini(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not model:
-        await update.message.reply_text("Ключ Gemini API не настроен.")
-        return
-    if not context.args:
-        await update.message.reply_text("❓ Напиши вопрос после команды /ask")
-        return
-    question = " ".join(context.args)
-    prompt = f"Ответь на вопрос: {question}\n\nВАЖНО: Ответ должен быть кратким."
-    waiting_msg = await update.message.reply_text("🤔 Думаю...")
-    response = await model.generate_content_async(prompt)
-    await waiting_msg.edit_text(response.text)
+        """Отвечает на любое текстовое сообщение, используя Gemini."""
+        if not model:
+            await update.message.reply_text("Ключ Gemini API не настроен.")
+            return
+
+        question = update.message.text
+        if not question:
+            return
+
+        prompt = f"Ответь на вопрос: {question}\n\nВАЖНО: Ответ должен быть кратким."
+        waiting_msg = await update.message.reply_text("🤔 Думаю...")
+
+        try:
+            response = await model.generate_content_async(prompt)
+            await waiting_msg.edit_text(response.text)
+        except Exception as e:
+            print(f"Ошибка Gemini: {e}")
+            await waiting_msg.edit_text(f"Произошла ошибка при запросе к Gemini: {e}")
 
 
 # --- Настройка сервера FastAPI ---
@@ -234,10 +259,28 @@ async def lifespan(app: FastAPI):
 api = FastAPI(lifespan=lifespan)
 application = Application.builder().token(TOKEN).build()
 
+# --- ❗️ ОБНОВЛЕННЫЙ БЛОК ОБРАБОТЧИКОВ ❗️ ---
+
+# Команда /setup для настройки
 application.add_handler(CommandHandler("setup", setup))
-application.add_handler(CommandHandler("remove", remove_task))
-application.add_handler(CommandHandler("ask", ask_gemini))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_task))
+
+# Команда /ask для Gemini
+application.add_handler(CommandHandler("ask", ask_gemini)) 
+
+# Удаление задач по тексту: "удали 1", "Удали 5"
+application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(удали|Удали)'), remove_task))
+
+# Добавление задач по тексту: "- Новая задача 25.10"
+application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^-'), add_task))
+
+# ❗️ ВСЕ ОСТАЛЬНЫЕ СООБЩЕНИЯ (не команды, не "удали", не "-") -> к Gemini
+application.add_handler(MessageHandler(
+    filters.TEXT & 
+    ~filters.COMMAND & 
+    ~filters.Regex(r'^(удали|Удали)') & 
+    ~filters.Regex(r'^-'), 
+    ask_gemini
+))
 
 URL_PATH = os.getenv("WEBHOOK_SECRET", "webhook")
 
