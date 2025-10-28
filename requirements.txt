@@ -5,6 +5,7 @@ python-dotenv==1.0.1
 requests
 beautifulsoup4
 fastapi==0.111.0
+packaging
 
 
 
