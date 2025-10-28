@@ -477,18 +477,6 @@ async def check_reminders_and_parse_homework_endpoint():
     
     logging.info(f"CRON: Проверка завершена. {reminder_message}. {parser_message}")
     return Response(status_code=200, content=f"{reminder_message}. {parser_message}")
-```
 
----
-
-## 💥 Что тебе нужно сделать (Инструкция)
-
-1.  **Обнови `main.py`**:
-    * Полностью замени свой `main.py` на Render на код, который я дал выше.
-
-2.  **Обнови `requirements.txt`**:
-    * Убедись, что в твоем `requirements.txt` есть эти строки (добавь, если их нет):
-    ```
-    requests
-    beautifulsoup4
     
+
