@@ -43,12 +43,13 @@ COOKIES = {
 # --- Парсер KSE ---
 async def parse_homework() -> list[dict]:
     """
-    Парсит сайт KSE и возвращает СПИСОК СЛОВАРЕЙ с задачами.
+    Парсит сайт KSE, ищет активности с "quiz icon" и дедлайном,
+    возвращает СПИСОК СЛОВАРЕЙ с задачами.
     """
-    logging.info("Запускаю парсер для KSE...")
+    logging.info("Запускаю парсер для KSE (фильтр по quiz icon)...")
     
     if not COOKIES:
-        logging.warning("MOODLE_SESSION_COOKIE не установлен. Парсинг будет в гостевом режиме (скорее всего, неудачно).")
+        logging.warning("MOODLE_SESSION_COOKIE не установлен. Парсинг будет в гостевом режиме.")
 
     try:
         response = requests.get(
@@ -86,6 +87,12 @@ async def parse_homework() -> list[dict]:
                 continue
 
             for task in tasks:
+                # --- ❗️❗️❗️ НОВАЯ ПРОВЕРКА: Ищем иконку квиза ❗️❗️❗️ ---
+                quiz_icon = task.find('img', alt='quiz icon')
+                if not quiz_icon:
+                    continue # Если иконки нет, пропускаем эту активность
+
+                # --- Если иконка есть, продолжаем как раньше ---
                 task_name_element = task.find('span', class_='instancename')
                 if not task_name_element:
                     continue
@@ -102,23 +109,28 @@ async def parse_homework() -> list[dict]:
                 if dates_div:
                     date_lines = dates_div.find('div', class_='description-inner').find_all('div')
                     for line in date_lines:
+                        # Ищем "Closed:", "Closes:", "Due:"
                         line_text = line.text.strip()
-                        if line_text.startswith("Due:") or line_text.startswith("Closes:"):
+                        if line_text.startswith(("Closed:", "Closes:", "Due:")):
+                            # Парсим дату 'Friday, 26 September 2025' или 'Monday, 27 October 2025'
+                            # Учитываем день недели, запятую
                             date_match = re.search(r'(\d{1,2}\s+\w+\s+\d{4})', line_text)
                             if date_match:
                                 try:
                                     date_str = date_match.group(1)
-                                    deadline_obj = datetime.strptime(date_str, '%d %B %Y')
+                                    # Используем правильный формат с %B для полного названия месяца
+                                    deadline_obj = datetime.strptime(date_str, '%d %B %Y') 
                                     deadline_iso = deadline_obj.strftime('%Y-%m-%d')
                                 except Exception as e:
-                                    logging.error(f"Парсер KSE: Не смог спарсить дату '{date_str}': {e}")
-                            break 
+                                    logging.error(f"Парсер KSE: Не смог спарсить дату '{date_str}' из строки '{line_text}': {e}")
+                            break # Нашли нужную строку, выходим из цикла по строкам дат
                 
+                # Добавляем задачу, ТОЛЬКО если у нее есть иконка И дедлайн
                 if deadline_iso:
                     full_task_name = f"KSE: {task_name} ({section_title})"
                     all_found_tasks.append({"task": full_task_name, "deadline": deadline_iso})
 
-        logging.info(f"Парсер KSE: Найдено {len(all_found_tasks)} заданий с дедлайнами.")
+        logging.info(f"Парсер KSE: Найдено {len(all_found_tasks)} заданий с 'quiz icon' и дедлайнами.")
         return all_found_tasks
 
     except requests.exceptions.RequestException as e:
@@ -127,6 +139,7 @@ async def parse_homework() -> list[dict]:
     except Exception as e:
         logging.error(f"Парсер KSE: Неожиданная ошибка: {e}", exc_info=True)
         return []
+
 
 
 # --- Вспомогательные функции ---
@@ -464,4 +477,5 @@ async def check_reminders_and_parse_homework_endpoint():
     
     logging.info(f"CRON: Проверка завершена. {reminder_message}. {parser_message}")
     return Response(status_code=200, content=f"{reminder_message}. {parser_message}")
+
 
