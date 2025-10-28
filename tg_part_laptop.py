@@ -3,9 +3,9 @@ import re
 import json
 from datetime import datetime
 from contextlib import asynccontextmanager
-import logging # Добавлен логгер
+import logging 
 
-# --- ❗️ Новые импорты для парсера ---
+# --- Новые импорты для парсера ---
 import requests
 from bs4 import BeautifulSoup
 
@@ -28,25 +28,22 @@ if GEMINI_API_KEY:
 else:
     model = None
 
-# --- ❗️ Новые константы для парсера KSE ---
+# --- Константы для парсера KSE ---
 HOMEWORK_URL = 'https://teaching.kse.org.ua/course/view.php?id=3162'
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 
-# ❗️❗️❗️ ВАЖНО: Добавь эту переменную в Environment на Render
-# (Инструкцию, как ее получить, я давал в прошлом сообщении)
 MOODLE_SESSION_COOKIE = os.getenv("MOODLE_SESSION_COOKIE")
 COOKIES = {
     'MoodleSession': MOODLE_SESSION_COOKIE
 } if MOODLE_SESSION_COOKIE else {}
 
 
-# --- ❗️ Новая функция: Парсер KSE ---
+# --- Парсер KSE ---
 async def parse_homework() -> list[dict]:
     """
     Парсит сайт KSE и возвращает СПИСОК СЛОВАРЕЙ с задачами.
-    [{"task": "KSE: Week 1 (Week 1)", "deadline": "2025-12-14"}, ...]
     """
     logging.info("Запускаю парсер для KSE...")
     
@@ -63,11 +60,11 @@ async def parse_homework() -> list[dict]:
         
         if response.status_code != 200:
             logging.error(f"Парсер KSE: Ошибка! Сайт вернул статус {response.status_code}")
-            return [] # Возвращаем пустой список
+            return [] 
         
         if 'login/index.php' in response.url:
             logging.error("Парсер KSE: Ошибка! Нас перекинуло на страницу логина. `MOODLE_SESSION_COOKIE` неверный или истек.")
-            return [] # Возвращаем пустой список
+            return [] 
 
         soup = BeautifulSoup(response.text, 'html.parser')
         weeks_container = soup.find('ul', class_='weeks')
@@ -93,7 +90,6 @@ async def parse_homework() -> list[dict]:
                 if not task_name_element:
                     continue
                 
-                # Копируем, чтобы безопасно удалить " (Quiz)"
                 task_name_clone = BeautifulSoup(str(task_name_element), 'html.parser')
                 accesshide = task_name_clone.find('span', class_='accesshide')
                 if accesshide:
@@ -108,7 +104,6 @@ async def parse_homework() -> list[dict]:
                     for line in date_lines:
                         line_text = line.text.strip()
                         if line_text.startswith("Due:") or line_text.startswith("Closes:"):
-                            # Нашли дедлайн, парсим дату '27 October 2025'
                             date_match = re.search(r'(\d{1,2}\s+\w+\s+\d{4})', line_text)
                             if date_match:
                                 try:
@@ -134,10 +129,9 @@ async def parse_homework() -> list[dict]:
         return []
 
 
-# --- Вспомогательные функции (ТВОЙ КОД, С ЛЕГКИМ РЕФАКТОРИНГОМ) ---
+# --- Вспомогательные функции ---
 
 def parse_date_from_text(text: str) -> (str, str):
-    # ... (твой код парсинга дат, он идеален, не трогаю)
     date_obj = None
     task_text = text
     match = re.search(r'(\d{1,2}\.\d{1,2}\.\d{4})', text)
@@ -175,7 +169,6 @@ def parse_date_from_text(text: str) -> (str, str):
 
 
 def parse_tasks_from_text(text: str) -> list:
-    # ... (твой код парсинга задач, он идеален, не трогаю)
     if not text: return []
     tasks, lines = [], text.split('\n')[1:]
     pattern = re.compile(r'^\d+\.\s+(.*?)(?:\s+\(([^)]+)\))?$')
@@ -185,11 +178,9 @@ def parse_tasks_from_text(text: str) -> list:
         match = pattern.match(line)
         if match:
             task_text = match.group(1).strip()
-            # Улучшаем проверку дедлайна, чтобы "KSE: ..." тоже парсилось
             deadline_str_match = re.search(r'(\d{4}-\d{2}-\d{2})', match.group(2) or '')
             deadline_str = deadline_str_match.group(1) if deadline_str_match else None
             
-            # Восстанавливаем оригинальную строку (важно для парсера KSE)
             if 'KSE: ' in task_text and match.group(2):
                  task_text = f"{task_text} ({match.group(2)})"
                  
@@ -197,10 +188,7 @@ def parse_tasks_from_text(text: str) -> list:
     return tasks
 
 
-# --- ❗️ РЕФАКТОРИНГ: get_tasks_from_message ---
-# Теперь принимает 'bot' вместо 'context', чтобы FastAPI мог его вызывать
 async def get_tasks_from_message(bot: Bot) -> list:
-    """Читает закрепленное сообщение и возвращает список задач."""
     if not TARGET_CHAT_ID: return []
     try:
         chat_info = await bot.get_chat(chat_id=TARGET_CHAT_ID)
@@ -212,10 +200,7 @@ async def get_tasks_from_message(bot: Bot) -> list:
         return []
 
 
-# --- ❗️ РЕФАКТОРИНГ: update_tasks_message ---
-# Теперь принимает 'bot' вместо 'context'
 async def update_tasks_message(bot: Bot, tasks: list):
-    """Обновляет текст сообщения-хранилища."""
     if not (TARGET_CHAT_ID and MESSAGE_ID_TO_EDIT):
         logging.error("Переменные ID не установлены. Обновление невозможно.")
         return
@@ -230,13 +215,12 @@ async def update_tasks_message(bot: Bot, tasks: list):
         
         for i, t in enumerate(sorted_tasks, start=1):
             line = t["task"]
-            deadline_str = "" # Строка для дедлайна
+            deadline_str = "" 
             
             if t.get("deadline"):
                 date = datetime.strptime(t["deadline"], "%Y-%m-%d")
                 days_left = (date.date() - now.date()).days
                 
-                # Форматируем дедлайн
                 if days_left < 0:
                     deadline_str = "(просрочено)"
                 elif days_left == 0:
@@ -246,16 +230,12 @@ async def update_tasks_message(bot: Bot, tasks: list):
                 else:
                     deadline_str = f"({t['deadline']})"
                 
-                # Применяем "раскраску" к KSE задачам
                 if 'KSE: ' in line and deadline_str:
-                    # У KSE задач уже есть (Week...) в названии
-                    # Заменяем его на (deadline_str)
-                    line = re.sub(r'\s+\(.*\)$', '', line) # Убираем старую скобку
-                    line = f"{line} {deadline_str}" # Добавляем новую
+                    line = re.sub(r'\s+\(.*\)$', '', line) 
+                    line = f"{line} {deadline_str}" 
                 elif deadline_str:
-                     line = f"{line} {deadline_str}" # Для обычных задач
+                     line = f"{line} {deadline_str}" 
 
-                # Применяем форматирование
                 if days_left < 0:
                     line = f"❌ ~{line}~"
                 elif days_left <= 2:
@@ -302,18 +282,16 @@ async def setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """❗️ ОБНОВЛЕННАЯ ФУНКЦИЯ ❗️"""
-    tasks = await get_tasks_from_message(context.bot) # <--- Изменено
+    tasks = await get_tasks_from_message(context.bot) 
     text = update.message.text.strip().lstrip('-').strip()
     task_text, deadline_iso = parse_date_from_text(text)
     tasks.append({"task": task_text, "deadline": deadline_iso})
-    await update_tasks_message(context.bot, tasks) # <--- Изменено
+    await update_tasks_message(context.bot, tasks) 
     await update.message.delete()
 
 
 async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Удаляет задачу по тексту 'удали N'."""
-    tasks = await get_tasks_from_message(context.bot) # <--- Изменено
+    tasks = await get_tasks_from_message(context.bot) 
     if not tasks:
         await update.message.reply_text("❌ Список задач и так пуст.", quote=False)
         return
@@ -334,7 +312,7 @@ async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if 0 <= index < len(tasks):
             original_index = sorted_tasks_with_indices[index][0]
             removed_task = tasks.pop(original_index)
-            await update_tasks_message(context.bot, tasks) # <--- Изменено
+            await update_tasks_message(context.bot, tasks) 
         else:
             await update.message.reply_text(f"❌ Неверный номер! Сейчас в списке {len(tasks)} задач.", quote=False)
     except (ValueError, IndexError):
@@ -396,13 +374,26 @@ async def process_telegram_update(request: Request):
         return Response(status_code=500)
 
 
-# --- ❗️❗️❗️ ПОЛНОСТЬЮ ОБНОВЛЕННЫЙ ЭНДПОИНТ ❗️❗️❗️ ---
+# --- ❗️❗️❗️ НОВЫЙ ЭНДПОИНТ-"БУДИЛЬНИК" ❗️❗️❗️ ---
+@api.get("/health")
+async def health_check():
+    """
+    Простой GET-эндпоинт, который "будит" сервис.
+    Вызывается каждые 10-14 минут внешним cron-job (типа UptimeRobot).
+    """
+    logging.info("PING: Сервис 'разбудили'.")
+    return Response(status_code=200, content='{"status": "alive"}')
+# --- ❗️❗️❗️ КОНЕЦ НОВОГО БЛОКА ❗️❗️❗️ ---
+
+
+# --- Эндпоинт для Напоминаний и Парсинга ---
 @api.post(f"/check_reminders/{REMINDER_SECRET}")
 async def check_reminders_and_parse_homework_endpoint():
     """
     Эндпоинт 2-в-1:
     1. Проверяет дедлайны и шлет напоминания.
     2. Парсит KSE, ищет новые ДЗ и добавляет их в список.
+    Вызывается каждые 30-60 минут внешним cron-job (типа cron-job.org).
     """
     logging.info(f"CRON: Запуск проверки напоминаний и парсинга KSE...")
     if not (TARGET_CHAT_ID and application.bot):
@@ -411,14 +402,13 @@ async def check_reminders_and_parse_homework_endpoint():
 
     bot = application.bot
     
-    # Получаем текущие задачи ИЗ СООБЩЕНИЯ
     try:
         current_tasks = await get_tasks_from_message(bot)
     except Exception as e:
          logging.error(f"CRON: Не смог получить задачи из сообщения: {e}")
          return Response(status_code=500, content=f"Error reading message: {e}")
 
-    # --- 1. Логика напоминаний (Твоя) ---
+    # --- 1. Логика напоминаний ---
     today = datetime.now().date()
     reminders_sent = []
     for task in current_tasks:
@@ -427,40 +417,37 @@ async def check_reminders_and_parse_homework_endpoint():
                 deadline_date = datetime.strptime(task["deadline"], "%Y-%m-%d").date()
                 days_left = (deadline_date - today).days
                 
-                # Напоминание СЕГОДНЯ
                 if days_left == 0:
                     reminder_text = f"❗️ **НАПОМИНАНИЕ (дедлайн сегодня):**\n{task['task']}"
                     await bot.send_message(chat_id=TARGET_CHAT_ID, text=reminder_text, parse_mode="Markdown")
                     reminders_sent.append(task['task'])
                 
-                # Напоминание ЗАВТРА
                 elif days_left == 1:
                     reminder_text = f"🔔 **НАПОМИНАНИЕ (дедлайн завтра):**\n{task['task']}"
                     await bot.send_message(chat_id=TARGET_CHAT_ID, text=reminder_text, parse_mode="Markdown")
                     reminders_sent.append(task['task'])
             except ValueError:
-                continue # Ошибка парсинга даты, пропускаем
+                continue 
 
-    # --- 2. Логика Парсера KSE (Новая) ---
+    # --- 2. Логика Парсера KSE ---
     parser_message = ""
     try:
-        new_hw_tasks = await parse_homework() # Запускаем парсер
+        new_hw_tasks = await parse_homework() 
         
-        # --- 3. Логика слияния (Мерж) ---
+        # --- 3. Логика слияния ---
         tasks_updated = False
-        # Создаем "сет" (множество) существующих задач для быстрой проверки
         current_task_strings = {t['task'] for t in current_tasks}
         new_tasks_added_count = 0
         
         for new_task in new_hw_tasks:
             if new_task['task'] not in current_task_strings:
-                current_tasks.append(new_task) # Добавляем новую задачу
+                current_tasks.append(new_task) 
                 tasks_updated = True
                 new_tasks_added_count += 1
                 
         if tasks_updated:
             logging.info(f"CRON: Парсер KSE нашел {new_tasks_added_count} новых заданий. Обновляю список.")
-            await update_tasks_message(bot, current_tasks) # Обновляем сообщение
+            await update_tasks_message(bot, current_tasks) 
             parser_message = f"Parser added {new_tasks_added_count} new tasks."
         else:
             logging.info("CRON: Парсер KSE не нашел новых заданий.")
@@ -477,6 +464,4 @@ async def check_reminders_and_parse_homework_endpoint():
     
     logging.info(f"CRON: Проверка завершена. {reminder_message}. {parser_message}")
     return Response(status_code=200, content=f"{reminder_message}. {parser_message}")
-
-    
 
