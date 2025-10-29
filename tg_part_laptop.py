@@ -517,7 +517,7 @@ async def lifespan(app: FastAPI):
     yield # Приложение работает
 
     logger.info("FastAPI приложение останавливается...")
-    if application and application.initialized:
+    if application and application._initialized:
         try:
             await application.shutdown()
             logger.info("Telegram Application остановлено.")
@@ -695,6 +695,7 @@ if __name__ == "__main__":
         logger.info("Остановка сервера...")
 
     
+
 
 
 
