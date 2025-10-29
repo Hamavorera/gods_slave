@@ -542,7 +542,7 @@ if application: # Добавляем хэндлеры, только если app
     application.add_handler(CommandHandler("setup", setup))
     application.add_handler(CommandHandler("ask", ask_gemini))
     # Удаление - более строгий регекс, чтобы не ловить "удалил"
-    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^(?i)удали\s+(\d+\s*)+$'), remove_task))
+    application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^[Уу]дали\s+(\d+\s*)+$'), remove_task))
     # Добавление
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^-'), add_task))
     # Gemini - должен быть ПОСЛЕДНИМ MessageHandler'ом
@@ -695,4 +695,5 @@ if __name__ == "__main__":
         logger.info("Остановка сервера...")
 
     
+
 
