@@ -549,7 +549,7 @@ if application: # Добавляем хэндлеры, только если app
     application.add_handler(MessageHandler(
         filters.TEXT &
         ~filters.COMMAND &
-        ~filters.Regex(r'^(?i)удали\s+(\d+\s*)+$') & # Обновленный регекс
+        ~filters.Regex(r'^[Уу]дали\s+(\d+\s*)+$') & # Обновленный регекс
         ~filters.Regex(r'^-'),
         ask_gemini
     ))
@@ -695,5 +695,6 @@ if __name__ == "__main__":
         logger.info("Остановка сервера...")
 
     
+
 
 
