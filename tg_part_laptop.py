@@ -39,7 +39,7 @@ if GEMINI_API_KEY:
             {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
         ]
-        model = genai.GenerativeModel("gemini-1.5-flash", safety_settings=safety_settings)
+        model = genai.GenerativeModel("gemini-2.5-flash", safety_settings=safety_settings)
         logger.info("Gemini модель успешно настроена.")
     except Exception as e:
         logger.error(f"Ошибка конфигурации Gemini: {e}")
@@ -515,7 +515,7 @@ async def ask_gemini(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     logger.info(f"Получен вопрос для Gemini: '{question}'")
-    prompt = f"Ответь на вопрос: {question}\n\nВАЖНО: Ответ должен быть кратким."
+    prompt = f"Ответь на вопрос: {question}\n\nВАЖНО: Ответ до 2000 символов."
     waiting_msg = await update.message.reply_text("🤔 Думаю...")
 
     try:
@@ -767,4 +767,5 @@ if __name__ == "__main__":
         asyncio.run(server.serve())
     except KeyboardInterrupt:
         logger.info("Остановка сервера...")
+
 
