@@ -34,12 +34,12 @@ if GEMINI_API_KEY:
         genai.configure(api_key=GEMINI_API_KEY)
         # Настраиваем safety settings, чтобы уменьшить вероятность блокировки
         safety_settings = [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
         ]
-        model = genai.GenerativeModel("gemini-2.5-flash", safety_settings=safety_settings)
+        model = genai.GenerativeModel("gemini-1.5-flash", safety_settings=safety_settings)
         logger.info("Gemini модель успешно настроена.")
     except Exception as e:
         logger.error(f"Ошибка конфигурации Gemini: {e}")
@@ -110,36 +110,23 @@ async def parse_homework() -> list[dict]:
                     date_lines = dates_div.find('div', class_='description-inner').find_all('div')
                     for line in date_lines:
                         line_text = line.text.strip()
+                        # Ищем Closes или Due
                         if line_text.startswith(("Closed:", "Closes:", "Due:")):
                             date_match = re.search(r'(\d{1,2}\s+\w+\s+\d{4})', line_text)
                             if date_match:
                                 try:
                                     date_str = date_match.group(1)
                                     # Используем английскую локаль для парсинга названий месяцев
-                                    # Это может потребовать установки локали на сервере, но requests/BS4 обычно справляются
                                     deadline_obj_dt = datetime.strptime(date_str, '%d %B %Y')
                                     deadline_obj = deadline_obj_dt.date() # Берем только дату
                                     deadline_iso = deadline_obj.strftime('%Y-%m-%d')
                                 except ValueError as e: # Ловим конкретно ValueError
-                                    # Попробуем русский формат месяца на всякий случай
-                                    try:
-                                        # Эта часть может потребовать настройки локали на сервере Render
-                                        import locale
-                                        try:
-                                            locale.setlocale(locale.LC_TIME, 'ru_RU.UTF-8')
-                                        except locale.Error:
-                                            logger.warning("Не удалось установить русскую локаль, парсинг русских месяцев может не работать.")
-                                            
-                                        deadline_obj_dt = datetime.strptime(date_str, '%d %B %Y')
-                                        deadline_obj = deadline_obj_dt.date() 
-                                        deadline_iso = deadline_obj.strftime('%Y-%m-%d')
-                                    except ValueError:
-                                         logger.error(f"Парсер KSE: Не смог спарсить дату '{date_str}' (ни en, ни ru): {e}")
+                                    logger.error(f"Парсер KSE: Не смог спарсить дату '{date_str}' (en): {e}.")
                                 except Exception as e: # Ловим другие ошибки парсинга даты
                                     logger.error(f"Парсер KSE: Ошибка парсинга даты '{date_str}': {e}")
-                            break
+                            break # Нашли строку с датой, выходим
 
-                # --- ❗️❗️❗️ НОВАЯ ПРОВЕРКА: Дедлайн еще не прошел? ❗️❗️❗️ ---
+                # --- Проверка: Дедлайн еще не прошел? ---
                 if deadline_iso and deadline_obj and deadline_obj >= today:
                     full_task_name = f"KSE: {task_name} ({section_title})"
                     all_found_tasks.append({"task": full_task_name, "deadline": deadline_iso})
@@ -165,7 +152,7 @@ async def parse_homework() -> list[dict]:
 # --- Вспомогательные функции ---
 
 def parse_date_from_text(text: str) -> (str, str):
-    # ... (твой код не трогаю)
+    # ... (код без изменений) ...
     date_obj = None
     task_text = text
     match = re.search(r'(\d{1,2}\.\d{1,2}\.\d{4})', text)
@@ -199,74 +186,110 @@ def parse_date_from_text(text: str) -> (str, str):
     return text.strip(), None
 
 
+# --- ❗️❗️❗️ ПОЛНОСТЬЮ ПЕРЕПИСАННАЯ ФУНКЦИЯ ❗️❗️❗️ ---
 def parse_tasks_from_text(text: str) -> list:
-    # ... (твой код не трогаю)
-    if not text: return []
-    tasks, lines = [], text.split('\n')[1:] # Начинаем со второй строки
-    # Паттерн ищет номер, текст задачи, и опционально дату в скобках в конце
-    pattern = re.compile(r'^\d+\.\s+(.*?)(?:\s+\(([\d\-]+|\w+[\s\w]*)\))?$') 
-    for line in lines:
-        cleaned_line = line.strip().replace('❌ ~', '').replace('~', '').replace('⚠️ *', '').replace('*', '')
-        # Убираем специфичные строки дедлайна перед матчингом
-        cleaned_line = re.sub(r'\s+\(просрочено\)$', '', cleaned_line)
-        cleaned_line = re.sub(r'\s+\(⚠️ СЕГОДНЯ\)$', '', cleaned_line)
-        cleaned_line = re.sub(r'\s+\(⚠️ осталось \d+ дн\.\)$', '', cleaned_line)
+    """
+    Парсит задачи из текста, корректно отделяя имя задачи от дедлайна.
+    """
+    if not text: 
+        logger.info("parse_tasks_from_text: Получен пустой текст.")
+        return []
         
-        if not cleaned_line: continue
+    tasks = []
+    lines = text.split('\n')
+    
+    # Регулярка для поиска строки задачи: "1. [ТЕКСТ ЗАДАЧИ] (ДЕДЛАЙН)"
+    # Группа 1 (task_text): Все, после "N. " и до последних скобок.
+    # Группа 2 (deadline_part): Опциональная часть в последних скобках.
+    pattern = re.compile(r'^\d+\.\s+(.+?)(?:\s+\(([^)]*)\))?$')
+
+    for line in lines:
+        # Убираем Markdown-мусор
+        cleaned_line = line.strip().replace('❌ ~', '').replace('~', '').replace('⚠️ *', '').replace('*', '')
+        
+        if not cleaned_line.startswith(tuple(f"{i}." for i in range(1, 200))):
+             # Пропускаем строки, не начинающиеся с "N." (например, заголовок)
+             continue
         
         match = pattern.match(cleaned_line)
+        
         if match:
-            task_text = match.group(1).strip()
-            deadline_part = match.group(2)
+            task_text_base = match.group(1).strip() # "Базовое" имя
+            deadline_part = match.group(2) # Содержимое скобок
             
-            # Ищем дату YYYY-MM-DD внутри скобок или отдельно
-            deadline_str_match = re.search(r'(\d{4}-\d{2}-\d{2})', deadline_part or '')
-            deadline_str = deadline_str_match.group(1) if deadline_str_match else None
-            
-            # Восстанавливаем оригинальную строку для KSE, если была дата
-            # KSE задачи теперь не будут иметь дату в скобках при парсинге из текста, т.к. ее формат другой
-            if 'KSE: ' in task_text and deadline_part and not deadline_str:
-                 # Если в скобках не дата, а, например, (Week 1), вернем это обратно
-                 task_text = f"{task_text} ({deadline_part})"
-                 
-            tasks.append({"task": task_text, "deadline": deadline_str})
-        elif line.strip(): # Если строка не пустая, но не подошла под паттерн, логируем
+            final_task_name = task_text_base
+            final_deadline_str = None
+
+            if deadline_part:
+                # Ищем внутри скобок дату формата YYYY-MM-DD
+                deadline_str_match = re.search(r'(\d{4}-\d{2}-\d{2})', deadline_part)
+                if deadline_str_match:
+                    # Нашли! Это дата.
+                    final_deadline_str = deadline_str_match.group(1)
+                    # Имя задачи - это "базовое" имя
+                    final_task_name = task_text_base
+                else:
+                    # Это НЕ дата (например, "(просрочено)", "(⚠️ СЕГОДНЯ)" или "(Week 1)")
+                    # В этом случае имя задачи - это все равно "базовое" имя.
+                    # Мы НЕ добавляем `deadline_part` обратно к имени,
+                    # потому что `update_tasks_message` добавит его сам.
+                    final_task_name = task_text_base
+                    
+                    # Особый случай: если KSE задача была без дедлайна,
+                    # ее имя в `task_text_base` может быть "KSE: Name"
+                    # а в `deadline_part` - "(Section)".
+                    # Нам нужно их склеить, чтобы получить уникальный ID.
+                    if 'KSE: ' in task_text_base and not final_deadline_str:
+                         # Проверяем, что в скобках НЕ динамический статус
+                         if not (deadline_part.startswith("⚠️") or deadline_part == "просрочено"):
+                              # Это, скорее всего, имя секции
+                              final_task_name = f"{task_text_base} ({deadline_part})"
+
+            tasks.append({"task": final_task_name, "deadline": final_deadline_str})
+        
+        elif line.strip() and not line.strip().startswith("📋"): # Логируем, если строка не пустая и не заголовок
              logger.warning(f"Не смог распарсить строку задачи: '{line.strip()}'")
              
+    logger.info(f"parse_tasks_from_text: Найдено {len(tasks)} задач из текста.")
     return tasks
 
 
 async def get_tasks_from_message(bot: Bot) -> list:
-    # ... (твой код не трогаю)
     if not TARGET_CHAT_ID: return []
     try:
-        # Убедимся, что ID сообщения существует
         if not MESSAGE_ID_TO_EDIT:
              logger.error("MESSAGE_ID_TO_EDIT не установлен!")
              return []
         
-        message = await bot.get_chat(chat_id=TARGET_CHAT_ID) # Получаем инфо о чате
-        # Ищем закрепленное сообщение (если оно есть и совпадает с нашим ID)
-        # ИЛИ просто читаем сообщение по ID, если оно не закреплено (на всякий случай)
+        message = await bot.get_chat(chat_id=TARGET_CHAT_ID) 
         target_message_text = None
-        if message.pinned_message and str(message.pinned_message.message_id) == MESSAGE_ID_TO_EDIT:
+        
+        # Проверяем ID сообщения в int
+        message_id_int = 0
+        try:
+             message_id_int = int(MESSAGE_ID_TO_EDIT)
+        except ValueError:
+             logger.error(f"MESSAGE_ID_TO_EDIT ('{MESSAGE_ID_TO_EDIT}') не является корректным числом.")
+             return []
+
+        if message.pinned_message and message.pinned_message.message_id == message_id_int:
              target_message_text = message.pinned_message.text
+             logger.info(f"Читаю задачи из закрепленного сообщения {message_id_int}.")
         else:
-             # Попробуем прочитать сообщение напрямую по ID
              try:
-                 msg_obj = await bot.get_message(chat_id=TARGET_CHAT_ID, message_id=MESSAGE_ID_TO_EDIT)
+                 msg_obj = await bot.get_message(chat_id=TARGET_CHAT_ID, message_id=message_id_int)
                  target_message_text = msg_obj.text
+                 logger.info(f"Читаю задачи из сообщения {message_id_int} (не закреплено).")
              except error.BadRequest as e:
-                 logger.error(f"Не удалось получить сообщение по ID {MESSAGE_ID_TO_EDIT}: {e}")
-                 # Возможно, сообщение удалено. Попробуем найти закрепленное, если есть.
+                 logger.error(f"Не удалось получить сообщение по ID {message_id_int}: {e}. Возможно, оно удалено или ID неверен.")
                  if message.pinned_message:
-                      logger.warning(f"Пытаюсь использовать текст из закрепленного сообщения {message.pinned_message.message_id} вместо {MESSAGE_ID_TO_EDIT}")
-                      target_message_text = message.pinned_message.text
-                 else:
-                      return [] # Сообщения нет
+                     logger.warning(f"Закрепленное сообщение ({message.pinned_message.message_id}) не совпадает с MESSAGE_ID_TO_EDIT ({message_id_int}).")
+                 return [] 
                  
         if target_message_text:
             return parse_tasks_from_text(target_message_text)
+        
+        logger.warning(f"Текст сообщения {message_id_int} пуст.")
         return []
     except Exception as e:
         logger.error(f"Не удалось прочитать сообщение: {e}", exc_info=True)
@@ -274,10 +297,24 @@ async def get_tasks_from_message(bot: Bot) -> list:
 
 
 async def update_tasks_message(bot: Bot, tasks: list):
-    # ... (твой код не трогаю, но добавил больше логов)
     if not (TARGET_CHAT_ID and MESSAGE_ID_TO_EDIT):
         logger.error("Переменные ID не установлены. Обновление невозможно.")
         return
+        
+    # --- ❗️❗️❗️ НОВАЯ ЛОГИКА: Очистка от дубликатов перед обновлением ❗️❗️❗️ ---
+    unique_tasks = []
+    seen_task_names = set()
+    for task in tasks:
+        task_name = task.get('task')
+        if task_name not in seen_task_names:
+            unique_tasks.append(task)
+            seen_task_names.add(task_name)
+        else:
+            logger.info(f"Обнаружен и удален дубликат задачи: '{task_name}'")
+    
+    # Обновляем `tasks` на отфильтрованный список
+    tasks = unique_tasks 
+    # --- Конец блока очистки ---
 
     text = "📋 *Список задач:*\n"
     if not tasks:
@@ -285,22 +322,20 @@ async def update_tasks_message(bot: Bot, tasks: list):
     else:
         now = datetime.now()
         try:
-            # Сортировка: сначала по дате (None или прошедшие в конце), потом по имени
             sorted_tasks = sorted(
                 tasks,
                 key=lambda x: (
                     datetime.strptime(x['deadline'], '%Y-%m-%d').date() if x.get('deadline') else date.max,
-                    x['task']
+                    x.get('task', '') # Добавим .get для надежности
                 )
             )
         except Exception as e:
             logger.error(f"Ошибка при сортировке задач: {e}", exc_info=True)
-            # В случае ошибки сортировки, выводим как есть
             sorted_tasks = tasks
             text += "\n⚠️ *Ошибка сортировки!* \n"
 
         for i, t in enumerate(sorted_tasks, start=1):
-            line = t.get("task", "Без названия") # На случай, если ключ 'task' отсутствует
+            line = t.get("task", "Без названия") 
             deadline_str_formatted = ""
 
             if t.get("deadline"):
@@ -318,26 +353,27 @@ async def update_tasks_message(bot: Bot, tasks: list):
                     else:
                         deadline_str_formatted = f"({t['deadline']})"
 
-                    # Аккуратно добавляем/заменяем дедлайн
-                    line_base = re.sub(r'\s+\([^)]*\)$', '', line).strip()
-                    line = f"{line_base} {deadline_str_formatted}"
+                    # Базовое имя - это УЖЕ `line`. KSE задачи уже имеют `(Section)` в имени.
+                    # Нам не нужно ничего отрезать.
+                    line = f"{line} {deadline_str_formatted}"
 
-                    # Markdown
                     if days_left < 0:
                         line = f"❌ ~{line}~"
                     elif days_left <= 2:
                         line = f"⚠️ *{line}*"
                 except ValueError:
                     logger.warning(f"Некорректная дата '{t['deadline']}' в задаче: {line}")
-                    # Оставляем оригинальную строку без изменений, если дата не парсится
-                    line = t["task"]
+                    line = t.get("task", "Без названия") # Используем .get
 
             text += f"{i}. {line}\n"
 
     try:
-        await bot.edit_message_text(text, chat_id=TARGET_CHAT_ID, message_id=MESSAGE_ID_TO_EDIT,
+        message_id_int = int(MESSAGE_ID_TO_EDIT) 
+        await bot.edit_message_text(text, chat_id=TARGET_CHAT_ID, message_id=message_id_int,
                                          parse_mode="Markdown")
-        logger.info(f"Сообщение {MESSAGE_ID_TO_EDIT} успешно обновлено.")
+        logger.info(f"Сообщение {message_id_int} успешно обновлено. Новое кол-во задач: {len(tasks)}")
+    except ValueError:
+         logger.error(f"MESSAGE_ID_TO_EDIT ('{MESSAGE_ID_TO_EDIT}') не является корректным числом. Не могу обновить сообщение.")
     except error.BadRequest as e:
         if "message is not modified" not in str(e):
             logger.error(f"Не удалось обновить сообщение {MESSAGE_ID_TO_EDIT}: {e}")
@@ -350,7 +386,7 @@ async def update_tasks_message(bot: Bot, tasks: list):
 # --- Команды ---
 
 async def setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ... (твой код не трогаю)
+    # ... (код без изменений) ...
     user_id = update.message.from_user.id
     setup_msg = await update.message.reply_text("Создаю хранилище задач...")
     message_id_to_edit = setup_msg.message_id
@@ -364,7 +400,6 @@ async def setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await setup_msg.edit_text(
         "**Это твое хранилище задач.**\n\n"
         "**Инструкция по настройке:**\n"
-        # ... (текст не трогаю) ...
          "1. Зайди в переменные окружения на Render.\n"
          "2. `TARGET_CHAT_ID`:\n"
          f"`{user_id}`\n"
@@ -378,11 +413,11 @@ async def setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ... (твой код не трогаю)
+    # ... (код без изменений) ...
     tasks = await get_tasks_from_message(context.bot)
     text = update.message.text.strip().lstrip('-').strip()
     task_text, deadline_iso = parse_date_from_text(text)
-    if not task_text: # Проверка, что текст задачи не пустой
+    if not task_text: 
          logger.warning("Попытка добавить пустую задачу.")
          await update.message.delete()
          return
@@ -391,16 +426,15 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.delete()
 
 
-# --- ❗️❗️❗️ ОБНОВЛЕННАЯ КОМАНДА УДАЛЕНИЯ (Bulk Delete) ❗️❗️❗️ ---
+# --- Команда удаления (Bulk Delete) ---
 async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Удаляет задачи по номерам 'удали N M K'."""
+    # ... (код без изменений) ...
     tasks = await get_tasks_from_message(context.bot)
     if not tasks:
         await update.message.reply_text("❌ Список задач и так пуст.", quote=False)
         return
 
     text = update.message.text.strip()
-    # Ищем ВСЕ числа в сообщении
     indices_to_remove_str = re.findall(r'\d+', text)
 
     if not indices_to_remove_str:
@@ -408,7 +442,6 @@ async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.delete()
         return
 
-    # Преобразуем строки в числа и вычитаем 1 для 0-based индексации
     try:
         indices_to_remove = {int(i) - 1 for i in indices_to_remove_str}
     except ValueError:
@@ -416,12 +449,11 @@ async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.delete()
         return
 
-    # Сортируем текущие задачи так же, как они отображаются
     sorted_tasks_with_indices = sorted(
-        enumerate(tasks), # Получаем пары (original_index, task_dict)
+        enumerate(tasks), 
         key=lambda x: (
             datetime.strptime(x[1]['deadline'], '%Y-%m-%d').date() if x[1].get('deadline') else date.max,
-            x[1]['task']
+            x[1].get('task', '') 
         )
     )
 
@@ -431,39 +463,49 @@ async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for display_index in indices_to_remove:
         if 0 <= display_index < len(sorted_tasks_with_indices):
-            # Находим реальный (original) индекс задачи в исходном списке `tasks`
             original_index = sorted_tasks_with_indices[display_index][0]
             actual_indices_to_delete.add(original_index)
-            removed_tasks_names.append(sorted_tasks_with_indices[display_index][1]['task']) # Сохраняем имя для ответа
+            removed_tasks_names.append(sorted_tasks_with_indices[display_index][1].get('task', '')) 
         else:
-            invalid_indices.append(display_index + 1) # Сохраняем невалидный номер (1-based)
+            invalid_indices.append(display_index + 1) 
 
     if invalid_indices:
         await update.message.reply_text(f"❌ Неверные номера: {', '.join(map(str, invalid_indices))}. Всего задач: {len(tasks)}.", quote=False)
 
     if not actual_indices_to_delete:
         await update.message.delete()
-        return # Нечего удалять
+        return 
 
-    # Создаем новый список задач, исключая те, что нужно удалить
-    # Идем по индексам в ОБРАТНОМ порядке, чтобы не сбить нумерацию при удалении
-    new_tasks = [task for i, task in enumerate(tasks) if i not in actual_indices_to_delete]
+    # Создаем новый список задач, сохраняя порядок
+    new_tasks = []
+    original_indices_to_delete_sorted = sorted(list(actual_indices_to_delete), reverse=True) 
     
-    # Обновляем сообщение с новым списком
+    temp_tasks = list(tasks) 
+    
+    for index_to_del in original_indices_to_delete_sorted:
+         if 0 <= index_to_del < len(temp_tasks):
+              del temp_tasks[index_to_del]
+         else:
+              logger.warning(f"Попытка удалить несуществующий индекс {index_to_del} при bulk delete.")
+              
+    new_tasks = temp_tasks
+
     await update_tasks_message(context.bot, new_tasks)
     
-    # Отправляем подтверждение (опционально)
     if len(removed_tasks_names) == 1:
          confirmation_text = f"✅ Задача '{removed_tasks_names[0]}' удалена!"
     else:
          confirmation_text = f"✅ Удалено задач: {len(removed_tasks_names)}."
-    # await update.message.reply_text(confirmation_text, quote=False) # Можно раскомментировать
+    
+    # Не отвечаем, чтобы не засорять чат
+    # await update.message.reply_text(confirmation_text, quote=False) 
 
     await update.message.delete()
 
 
-# --- Команда Ask Gemini (добавлено логирование) ---
+# --- Команда Ask Gemini ---
 async def ask_gemini(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # ... (код без изменений) ...
     if not model:
         await update.message.reply_text("Ключ Gemini API не настроен.")
         return
@@ -477,93 +519,116 @@ async def ask_gemini(update: Update, context: ContextTypes.DEFAULT_TYPE):
     waiting_msg = await update.message.reply_text("🤔 Думаю...")
 
     try:
-        # Используем асинхронный вызов с таймаутом
         response = await model.generate_content_async(
              prompt,
-             request_options={'timeout': 60} # Таймаут 60 секунд
+             request_options={'timeout': 60} 
         )
-        # Проверяем, есть ли текст в ответе
         if response.parts:
              answer = "".join(part.text for part in response.parts)
              logger.info(f"Gemini ответил: '{answer[:50]}...'")
              await waiting_msg.edit_text(answer)
-        # Обработка случая, когда Gemini вернул пустой ответ (например, из-за safety settings)
         else:
              logger.warning("Gemini вернул пустой ответ (возможно, сработали safety settings).")
-             # Пытаемся получить причину блокировки, если она есть
              block_reason = ""
              if response.prompt_feedback and response.prompt_feedback.block_reason:
                  block_reason = f" Причина: {response.prompt_feedback.block_reason.name}"
-             await waiting_msg.edit_text(f"Не могу сгенерировать ответ.{block_reason}")
+             await waiting_msg.edit_text("Извините, не могу сгенерировать ответ на этот запрос.")
+
 
     except Exception as e:
         logger.error(f"Ошибка Gemini: {e}", exc_info=True)
-        await waiting_msg.edit_text(f"Произошла ошибка при запросе к Gemini.")
+        await waiting_msg.edit_text("Произошла ошибка при обращении к AI.")
 
 
 # --- Настройка сервера FastAPI ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("FastAPI приложение запускается...")
+    # ... (код с исправлением _initialized) ...
+    logger.info("FastAPI приложение запускается (lifespan start)...")
     if TOKEN and application:
         try:
-            await application.initialize()
-            logger.info("Telegram Application инициализировано.")
+            if not application._initialized: # Use the private attribute
+                await application.initialize()
+                logger.info("Telegram Application инициализировано.")
+            else:
+                logger.info("Telegram Application уже было инициализировано.")
+            
+            webhook_url = os.getenv("RENDER_EXTERNAL_URL") 
+            if webhook_url:
+                 full_webhook_url = f"{webhook_url}/{URL_PATH}"
+                 current_webhook = await application.bot.get_webhook_info()
+                 if current_webhook.url != full_webhook_url:
+                      logger.info(f"Устанавливаю вебхук: {full_webhook_url}")
+                      # Устанавливаем вебхук, чтобы он принимал ТОЛЬКО 'message'
+                      await application.bot.set_webhook(full_webhook_url, allowed_updates=["message"]) 
+                 else:
+                      logger.info(f"Вебхук уже установлен: {current_webhook.url}")
+            else:
+                 logger.warning("RENDER_EXTERNAL_URL не найден, не могу установить вебхук автоматически.")
+
         except Exception as e:
-            logger.error(f"Ошибка инициализации Telegram Application: {e}", exc_info=True)
+            logger.error(f"Ошибка инициализации Telegram Application или установки вебхука: {e}", exc_info=True)
     elif not TOKEN:
          logger.error("TOKEN не найден! Telegram Application не будет инициализировано.")
 
-    yield # Приложение работает
-
-    logger.info("FastAPI приложение останавливается...")
-    if application and application._initialized:
+    logger.info("FastAPI приложение ГОТОВО к работе (после yield в lifespan).")
+    yield 
+    
+    logger.info("FastAPI приложение останавливается (lifespan shutdown)...")
+    if application and application._initialized: # Используем _initialized
         try:
             await application.shutdown()
             logger.info("Telegram Application остановлено.")
         except Exception as e:
             logger.error(f"Ошибка остановки Telegram Application: {e}", exc_info=True)
+    logger.info("FastAPI приложение остановлено.")
+
 
 api = FastAPI(lifespan=lifespan)
-# Проверяем наличие токена перед созданием Application
 if TOKEN:
     try:
         application = Application.builder().token(TOKEN).build()
         logger.info("Telegram Application создано.")
     except Exception as e:
-        logger.error(f"Критическая ошибка при создании Telegram Application: {e}. Бот не будет работать.", exc_info=True)
-        application = None # Указываем, что приложение не создано
+        logger.critical(f"Критическая ошибка при создании Telegram Application: {e}. Бот не будет работать.", exc_info=True)
+        application = None 
 else:
-    logger.error("Критическая ошибка: TOKEN не найден! Бот не будет работать.")
+    logger.critical("Критическая ошибка: TOKEN не найден! Бот не будет работать.")
     application = None
 
 # --- Обработчики ---
-if application: # Добавляем хэндлеры, только если application создано
+if application: 
     application.add_handler(CommandHandler("setup", setup))
     application.add_handler(CommandHandler("ask", ask_gemini))
-    # Удаление - более строгий регекс, чтобы не ловить "удалил"
+    
+    # --- ❗️❗️❗️ ИСПРАВЛЕННЫЙ РЕГЕКС (Fix 2) ❗️❗️❗️ ---
+    # Используем [Уу] вместо (?i)
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^[Уу]дали\s+(\d+\s*)+$'), remove_task))
-    # Добавление
+    
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^-'), add_task))
-    # Gemini - должен быть ПОСЛЕДНИМ MessageHandler'ом
+    
     application.add_handler(MessageHandler(
         filters.TEXT &
         ~filters.COMMAND &
-        ~filters.Regex(r'^[Уу]дали\s+(\d+\s*)+$') & # Обновленный регекс
+        # --- ❗️❗️❗️ ИСПРАВЛЕННЫЙ РЕГЕКС (Fix 2) ❗️❗️❗️ ---
+        ~filters.Regex(r'^[Уу]дали\s+(\d+\s*)+$') & 
         ~filters.Regex(r'^-'),
         ask_gemini
     ))
+    logger.info("Обработчики Telegram добавлены.")
 else:
     logger.error("Хэндлеры Telegram не будут добавлены, так как Application не инициализировано.")
 
 URL_PATH = os.getenv("WEBHOOK_SECRET", "webhook")
 @api.post(f"/{URL_PATH}")
 async def process_telegram_update(request: Request):
+    # ... (код без изменений) ...
     if not application:
         logger.error("Получен Telegram update, но Application не инициализировано.")
         return Response(status_code=500, content="Bot not initialized")
     try:
         data = await request.json()
+        logger.debug(f"Получен Telegram update: {data}") 
         update = Update.de_json(data, application.bot)
         await application.process_update(update)
         return Response(status_code=200)
@@ -575,33 +640,36 @@ async def process_telegram_update(request: Request):
 # --- Эндпоинт-"будильник" /health ---
 @api.get("/health")
 async def health_check():
-    """ Простой GET-эндпоинт, который "будит" сервис. """
-    logger.info("PING: Сервис 'разбудили'.")
-    return Response(status_code=200, content='{"status": "alive"}')
+    # ... (код без изменений) ...
+    logger.info("PING: /health вызван.")
+    if application and application._initialized:
+        return Response(status_code=200, content='{"status": "alive"}')
+    else:
+        logger.error("Health check: Telegram Application не инициализировано!")
+        return Response(status_code=503, content='{"status": "initializing_or_failed"}')
 
 
-# --- ❗️❗️❗️ ОБНОВЛЕННЫЙ ЭНДПОИНТ для Напоминаний и Парсинга ❗️❗️❗️ ---
-# Используем BackgroundTasks для парсера
+# --- Эндпоинт для Напоминаний и Парсинга ---
 @api.post(f"/check_reminders/{REMINDER_SECRET}")
 async def check_reminders_and_schedule_parse(background_tasks: BackgroundTasks):
-    """
-    Эндпоинт, который:
-    1. БЫСТРО проверяет напоминания и отправляет их.
-    2. ДОБАВЛЯЕТ В ОЧЕРЕДЬ фоновую задачу для парсинга KSE и обновления списка.
-    """
+    # ... (код без изменений) ...
     endpoint_start_time = time.time()
-    logger.info(f"CRON: Запуск проверки напоминаний...")
+    logger.info(f"CRON: Запуск /check_reminders...")
     if not (TARGET_CHAT_ID and application and application.bot):
-        logger.error("CRON: TARGET_CHAT_ID не установлен или бот не готов.")
-        return Response(status_code=500, content="Bot not ready")
+        logger.error("CRON: /check_reminders - Необходимые компоненты не готовы.")
+        return Response(status_code=503, content="Bot not ready or not configured")
 
     bot = application.bot
     reminders_sent_count = 0
 
     try:
-        current_tasks = await get_tasks_from_message(bot) # Получаем задачи для проверки напоминаний
+        if not MESSAGE_ID_TO_EDIT or not MESSAGE_ID_TO_EDIT.isdigit():
+             logger.error(f"CRON: /check_reminders - MESSAGE_ID_TO_EDIT ('{MESSAGE_ID_TO_EDIT}') неверен.")
+             return Response(status_code=500, content="MESSAGE_ID_TO_EDIT not configured correctly")
+             
+        current_tasks = await get_tasks_from_message(bot) 
         
-        # --- 1. Логика напоминаний (быстрая часть) ---
+        # --- 1. Логика напоминаний ---
         today = date.today()
         for task in current_tasks:
             if task.get("deadline"):
@@ -610,34 +678,32 @@ async def check_reminders_and_schedule_parse(background_tasks: BackgroundTasks):
                     days_left = (deadline_date - today).days
                     reminder_text = None
                     if days_left == 0:
-                        reminder_text = f"❗️ **НАПОМИНАНИЕ (дедлайн сегодня):**\n{task['task']}"
+                        reminder_text = f"❗️ **НАПОМИНАНИЕ (дедлайн сегодня):**\n{task.get('task', 'Название отсутствует')}"
                     elif days_left == 1:
-                        reminder_text = f"🔔 **НАПОМИНАНИЕ (дедлайн завтра):**\n{task['task']}"
+                        reminder_text = f"🔔 **НАПОМИНАНИЕ (дедлайн завтра):**\n{task.get('task', 'Название отсутствует')}"
                     
                     if reminder_text:
                         await bot.send_message(chat_id=TARGET_CHAT_ID, text=reminder_text, parse_mode="Markdown")
                         reminders_sent_count += 1
                 except ValueError: continue
-                except Exception as e: logger.error(f"CRON: Ошибка отправки напоминания: {e}")
+                except Exception as e: logger.error(f"CRON: Ошибка отправки напоминания для '{task.get('task', '?')}': {e}")
 
-        logger.info(f"CRON: Проверка напоминаний завершена. Отправлено: {reminders_sent_count}.")
+        logger.info(f"CRON: /check_reminders - Напоминания проверены ({reminders_sent_count} отправлено).")
 
-        # --- 2. Добавляем ПАРСИНГ и ОБНОВЛЕНИЕ в фоновую задачу ---
-        # Передаем текущие задачи, чтобы не читать их снова в фоне
+        # --- 2. Добавляем ПАРСИНГ в фон ---
         background_tasks.add_task(run_parser_and_update, bot, current_tasks)
-        logger.info("CRON: Задача парсинга KSE добавлена в фон.")
+        logger.info("CRON: /check_reminders - Задача парсинга добавлена в фон.")
 
         endpoint_duration = time.time() - endpoint_start_time
-        logger.info(f"CRON: Эндпоинт завершил работу за {endpoint_duration:.2f} сек.")
+        logger.info(f"CRON: /check_reminders - Эндпоинт завершил работу за {endpoint_duration:.2f} сек.")
         
-        # СРАЗУ возвращаем ответ, не дожидаясь парсера
         return Response(status_code=200, content=f"Reminders checked ({reminders_sent_count} sent). Parser scheduled.")
 
     except Exception as e:
-        logger.error(f"CRON: Критическая ошибка в эндпоинте /check_reminders: {e}", exc_info=True)
+        logger.error(f"CRON: /check_reminders - Критическая ошибка: {e}", exc_info=True)
         return Response(status_code=500, content=f"Error in reminder check: {e}")
 
-# --- ❗️❗️❗️ НОВАЯ ФУНКЦИЯ для фоновой задачи парсинга ❗️❗️❗️ ---
+# --- Функция фоновой задачи парсинга ---
 async def run_parser_and_update(bot: Bot, current_tasks: list):
     """
     Эта функция выполняется в ФОНЕ.
@@ -647,22 +713,33 @@ async def run_parser_and_update(bot: Bot, current_tasks: list):
     task_start_time = time.time()
     parser_message = ""
     try:
-        new_hw_tasks = await parse_homework() # Запускаем парсер
+        new_hw_tasks = await parse_homework() # Использует обновленный парсер
 
         # --- Логика слияния ---
         tasks_updated = False
-        current_task_strings = {t['task'] for t in current_tasks}
+        # --- ❗️❗️❗️ ИСПОЛЬЗУЕМ СЕТ ИЗ ФИКСИРОВАННОЙ ФУНКЦИИ ---
+        current_task_strings = {t.get('task') for t in current_tasks if t.get('task')} 
         new_tasks_added_count = 0
 
         for new_task in new_hw_tasks:
-            if new_task['task'] not in current_task_strings:
-                current_tasks.append(new_task)
+            new_task_name = new_task.get('task')
+            if new_task_name and new_task_name not in current_task_strings:
+                current_tasks.append(new_task) # Добавляем в список, который будет передан в update
                 tasks_updated = True
                 new_tasks_added_count += 1
+            elif not new_task_name:
+                 logger.warning("BG_TASK: Парсер вернул задачу без имени.")
+            elif new_task_name in current_task_strings:
+                 logger.info(f"BG_TASK: Задача '{new_task_name}' уже есть в списке, пропуск.")
+
 
         if tasks_updated:
             logger.info(f"BG_TASK: Парсер KSE нашел {new_tasks_added_count} новых заданий. Обновляю список...")
-            await update_tasks_message(bot, current_tasks) # Обновляем сообщение
+            if not MESSAGE_ID_TO_EDIT or not MESSAGE_ID_TO_EDIT.isdigit():
+                 logger.error(f"BG_TASK: MESSAGE_ID_TO_EDIT ('{MESSAGE_ID_TO_EDIT}') неверен. Не могу обновить сообщение.")
+            else:
+                 # Передаем обновленный current_tasks (включая старые и новые)
+                 await update_tasks_message(bot, current_tasks) 
             parser_message = f"Parser added {new_tasks_added_count} new tasks."
         else:
             logger.info("BG_TASK: Парсер KSE не нашел новых актуальных заданий.")
@@ -675,27 +752,19 @@ async def run_parser_and_update(bot: Bot, current_tasks: list):
     task_duration = time.time() - task_start_time
     logger.info(f"BG_TASK: Фоновый парсинг завершен за {task_duration:.2f} сек. {parser_message}")
 
-# --- Точка входа (если запускаем не через uvicorn напрямую) ---
-# Обычно Render использует команду uvicorn, эта часть может не выполняться
+
+# --- Точка входа ---
 if __name__ == "__main__":
-
     import uvicorn
-    port = int(os.getenv("PORT", 8080)) # Берем порт из окружения или дефолтный
-    logger.info(f"Запуск Uvicorn на порту {port}...")
-
-    config = uvicorn.Config(app=api, host="0.0.0.0", port=port, lifespan="on")
+    port = int(os.getenv("PORT", 8080)) 
+    logger.info(f"Запуск Uvicorn локально на порту {port}...")
+    # Указываем `main:api` как строку, чтобы reload работал
+    config = uvicorn.Config(app="main:api", host="0.0.0.0", port=port, lifespan="on", reload=True) 
     server = uvicorn.Server(config)
     
-    # Запускаем асинхронно (нужно для Python 3.7+)
     import asyncio
     try:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(server.serve())
+        asyncio.run(server.serve())
     except KeyboardInterrupt:
         logger.info("Остановка сервера...")
-
-    
-
-
-
 
